@@ -3,6 +3,21 @@
 All notable changes to this plugin are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/).
 
+## [1.2.0] - 2026-11-08
+
+### Added
+- 分群规则新增 `phone` 匹配方式：从申请理由里取出学习通手机号（兼容全角、空格、横线、+86），调用平台 `POST /api/bot/member-check` 确认后才放行
+- 拒绝时把平台给的原因回给申请人（没登录过 / 号码已被别的 QQ 用过 / QQ 已绑定别的号码）
+- `xxt` 配置：平台地址、机器人密钥、超时、接口出错策略（默认留给管理员人工审批）
+- 管理员命令 `/解绑 <QQ或手机号>`
+- `/joingate` 显示平台接口配置状态；`test` 在 phone 模式下只做干跑，不调用接口
+
+### Changed
+- 日志里的手机号统一打码
+
+### Tests
+- `test_phone.py`：手机号提取、phone 模式判定、本地假接口 HTTP 调用、出错策略、入群申请全流程
+
 ## [1.1.0] - 2026-11-09
 
 ### Added

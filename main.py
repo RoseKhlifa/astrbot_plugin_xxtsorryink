@@ -2,6 +2,8 @@
 
 两条链路：
 1. 入群申请：理由命中「放行理由」则同意，否则拒绝；黑名单用户直接拒绝。
+   规则选 phone 模式时，改为从理由里取出学习通手机号，调用平台接口确认
+   这个号码在平台里登录过，且没有被别的 QQ 用过。
 2. 进群验证：新人进群后 @ 出题（算术），限时回答；
    答对=通过；答错/超时=踢出；累计失败达上限=拉黑（拒绝再次加群 + 本地黑名单）。
 
@@ -11,9 +13,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import random
 import re
 import time
+import unicodedata
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -24,6 +30,9 @@ LOG_PREFIX = "[JoinGate]"
 
 KV_FAILURES = "verify_failures"   # {user_id: 累计失败次数}
 KV_BLACKLIST = "verify_blacklist"  # [user_id, ...]
+
+PHONE_MISSING = "请在申请理由里填写 11 位学习通手机号"
+API_BUSY = "验证服务暂时不可用，请稍后重新申请"
 
 # 协议端会把「入群问题 + 答案」整体塞进 comment，形如：
 #   问题：你好
@@ -88,6 +97,28 @@ def _parse_reasons(value: Any) -> list[str]:
         if item and not item.startswith("#"):
             out.append(item)
     return out
+
+
+_PHONE_RE = re.compile(r"(?<!\d)(?:86)?(1\d{10})(?!\d)")
+
+
+def _extract_phone(comment: str) -> str | None:
+    """从申请理由里取出 11 位手机号。
+
+    先看「答案：」后的内容，再看完整原文；全角数字、空格、横线、+86 都能认。
+    """
+    for cand in reversed(_answer_candidates(comment)):
+        text = unicodedata.normalize("NFKC", cand)
+        text = re.sub(r"[\s\-+]", "", text)
+        m = _PHONE_RE.search(text)
+        if m:
+            return m.group(1)
+    return None
+
+
+def _mask_phone(phone: str) -> str:
+    """日志里只留前三后四。"""
+    return f"{phone[:3]}****{phone[-4:]}" if len(phone) == 11 else "***"
 
 
 def _normalized_answers(text: str) -> set[str]:
@@ -163,7 +194,7 @@ class JoinGate(Star):
             if not gid:
                 continue
             mode = str(item.get("match_mode") or "exact").strip().lower()
-            if mode not in ("exact", "contains"):
+            if mode not in ("exact", "contains", "phone"):
                 mode = "exact"
             empty = str(item.get("on_empty_reason") or "reject").strip().lower()
             if empty not in ("reject", "approve"):
@@ -179,12 +210,31 @@ class JoinGate(Star):
             }
         return rules
 
+    def _xxt_cfg(self) -> dict[str, Any]:
+        raw = self.cfg.get("xxt") or {}
+        if not isinstance(raw, dict):
+            raw = {}
+        try:
+            timeout = min(30.0, max(2.0, float(raw.get("timeout_seconds", 8))))
+        except (TypeError, ValueError):
+            timeout = 8.0
+        on_error = str(raw.get("on_api_error") or "ignore").strip().lower()
+        if on_error not in ("ignore", "reject", "approve"):
+            on_error = "ignore"
+        return {
+            "api_base": str(raw.get("api_base") or "").strip().rstrip("/"),
+            "api_token": str(raw.get("api_token") or "").strip(),
+            "timeout": timeout,
+            "on_api_error": on_error,
+        }
+
     @staticmethod
     def _clean_comment(comment: str) -> str:
-        """日志用：把多行申请理由压成一行。"""
-        return " ⏎ ".join(
+        """日志用：把多行申请理由压成一行，手机号打码。"""
+        text = " ⏎ ".join(
             part.strip() for part in (comment or "").splitlines() if part.strip()
         )
+        return re.sub(r"(?<!\d)(1\d{2})\d{4}(\d{4})(?!\d)", r"\1****\2", text)
 
     # -------------------------------------------------------------- KV 状态
     async def _failures(self) -> dict[str, int]:
@@ -222,11 +272,18 @@ class JoinGate(Star):
             return False, "未填写申请理由"
 
         reasons: list[str] = rule.get("reasons") or []
+        mode = rule.get("match_mode")
+        if mode == "phone":
+            # 干跑：只看能不能取到手机号，真正放行要等接口确认
+            phone = _extract_phone(comment)
+            if phone:
+                return True, f"取到手机号 {_mask_phone(phone)}（实际放行还要接口确认）"
+            return False, PHONE_MISSING
+
         if not reasons:
             return False, "该群未配置放行理由"
 
         candidates = _answer_candidates(comment)
-        mode = rule.get("match_mode")
 
         if mode == "contains":
             for cand in candidates:
@@ -241,6 +298,69 @@ class JoinGate(Star):
                         how = "完整原文" if cand == comment else "抽取的答案"
                         return True, f"理由完全匹配（{how}）"
         return False, "理由不在放行名单"
+
+    # ------------------------------------------------------------ 平台接口
+    def _xxt_request(self, method: str, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """同步调用平台接口（放在线程里跑）。失败抛 RuntimeError。"""
+        xcfg = self._xxt_cfg()
+        if not xcfg["api_base"] or not xcfg["api_token"]:
+            raise RuntimeError("未配置平台接口地址或密钥")
+        req = urllib.request.Request(
+            xcfg["api_base"] + path,
+            data=json.dumps(payload).encode("utf-8"),
+            method=method,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {xcfg['api_token']}",
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=xcfg["timeout"]) as resp:
+                return json.loads(resp.read().decode("utf-8") or "{}")
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", "replace").strip()[:120]
+            raise RuntimeError(f"HTTP {exc.code} {body}") from exc
+        except (urllib.error.URLError, TimeoutError, ValueError) as exc:
+            raise RuntimeError(str(exc)) from exc
+
+    async def _member_check(self, phone: str, qq: str, group_id: str) -> dict[str, Any]:
+        return await asyncio.to_thread(
+            self._xxt_request,
+            "POST",
+            "/api/bot/member-check",
+            {"phone": phone, "qq": qq, "group_id": group_id},
+        )
+
+    async def _unbind(self, target: str) -> dict[str, Any]:
+        key = "phone" if _extract_phone(target) == target else "qq"
+        return await asyncio.to_thread(
+            self._xxt_request, "DELETE", "/api/bot/member-binding", {key: target}
+        )
+
+    async def _decide_phone(
+        self, rule: dict[str, Any], comment: str, user_id: str, group_id: str
+    ) -> tuple[bool | None, str, str]:
+        """phone 模式判定。返回 (放行? None=留给人工, 回给申请人的理由, 日志说明)。"""
+        if not comment.strip() and rule.get("on_empty_reason") == "approve":
+            return True, "", "未填写理由 -> 按配置放行"
+        phone = _extract_phone(comment)
+        if not phone:
+            return False, PHONE_MISSING, "理由里没有手机号"
+        try:
+            result = await self._member_check(phone, user_id, group_id)
+        except Exception as exc:  # noqa: BLE001
+            on_error = self._xxt_cfg()["on_api_error"]
+            why = f"手机号 {_mask_phone(phone)} 校验接口出错：{exc}"
+            if on_error == "approve":
+                return True, "", why + " -> 按配置放行"
+            if on_error == "reject":
+                return False, API_BUSY, why + " -> 按配置拒绝"
+            return None, "", why + " -> 留给管理员人工处理"
+        code = str(result.get("code") or "")
+        if result.get("ok") is True:
+            return True, "", f"手机号 {_mask_phone(phone)} 已确认"
+        message = str(result.get("message") or rule["reject_reason"])
+        return False, message, f"手机号 {_mask_phone(phone)} 未通过（{code}）"
 
     # ------------------------------------------------------------------ 客户端
     def _find_bot(self) -> Any:
@@ -336,14 +456,25 @@ class JoinGate(Star):
             event.stop_event()
             return
 
-        approve, why = self._decide(rule, comment)
+        if rule["match_mode"] == "phone":
+            approve, reject_text, why = await self._decide_phone(
+                rule, comment, user_id, group_id
+            )
+            if approve is None:
+                self.logger.warning(
+                    f"{LOG_PREFIX} 群 {group_id} 用户 {user_id} {why}"
+                )
+                return
+        else:
+            approve, why = self._decide(rule, comment)
+            reject_text = rule["reject_reason"]
         payload: dict[str, Any] = {
             "flag": flag,
             "sub_type": "add",
             "approve": approve,
         }
         if not approve:
-            payload["reason"] = rule["reject_reason"]
+            payload["reason"] = reject_text
 
         try:
             await bot.call_action("set_group_add_request", **payload)
@@ -613,6 +744,7 @@ class JoinGate(Star):
         "禁言：/禁言 <QQ> [时长 600|10m|2h|1d|永久]\n"
         "解除禁言：/解禁 <QQ>\n"
         "踢出：/踢 <QQ> [黑]\n"
+        "解绑手机号：/解绑 <QQ或手机号>（换了 QQ 时用）\n"
         "查看本插件规则：/joingate"
     )
 
@@ -664,7 +796,7 @@ class JoinGate(Star):
         cmd = parts[0]
         args = parts[1:]
 
-        known = {"拉黑", "解黑", "黑名单", "禁言", "解禁", "踢", "群管", "管理", "帮助"}
+        known = {"拉黑", "解黑", "黑名单", "禁言", "解禁", "踢", "解绑", "群管", "管理", "帮助"}
         if cmd not in known:
             return
 
@@ -693,6 +825,27 @@ class JoinGate(Star):
             yield event.plain_result(
                 "黑名单：\n" + "\n".join(f"- {x}" for x in bl) if bl else "黑名单为空"
             )
+            event.stop_event()
+            return
+
+        if cmd == "解绑":
+            # 不需要群号：取最后一个参数（QQ 或手机号）
+            target = args[-1].strip() if args else ""
+            if not target.isdigit():
+                yield event.plain_result("用法：/解绑 <QQ号或手机号>")
+                return
+            try:
+                result = await self._unbind(target)
+            except Exception as exc:  # noqa: BLE001
+                yield event.plain_result(f"解绑失败：{exc}")
+                return
+            shown = _mask_phone(target) if _extract_phone(target) == target else target
+            if result.get("removed"):
+                yield event.plain_result(
+                    f"已解绑 {shown}（原绑定 QQ {result.get('qq')}），可以重新申请了"
+                )
+            else:
+                yield event.plain_result(f"{shown} 没有绑定记录")
             event.stop_event()
             return
 
@@ -842,10 +995,22 @@ class JoinGate(Star):
             f" | 限时 {vcfg['timeout_seconds']}s | 上限 {vcfg['max_failures']} 次"
         ]
         for gid, rule in rules.items():
-            mode = "包含" if rule["match_mode"] == "contains" else "完全匹配"
+            mode = {"contains": "包含", "phone": "手机号校验"}.get(
+                rule["match_mode"], "完全匹配"
+            )
             lines.append(
                 f"- {gid}｜{mode}｜{len(rule['reasons'])} 条理由"
                 f"｜验证:{'开' if rule['verify'] else '关'}"
                 f"｜空理由:{'放行' if rule['on_empty_reason'] == 'approve' else '拒绝'}"
+            )
+        if any(r["match_mode"] == "phone" for r in rules.values()):
+            xcfg = self._xxt_cfg()
+            ready = bool(xcfg["api_base"] and xcfg["api_token"])
+            on_error = {"ignore": "留给人工", "reject": "拒绝", "approve": "放行"}
+            lines.append(
+                f"平台接口：{xcfg['api_base'] or '未配置'}"
+                f"｜密钥:{'已配置' if xcfg['api_token'] else '未配置'}"
+                f"｜出错时:{on_error[xcfg['on_api_error']]}"
+                + ("" if ready else "｜手机号校验无法工作，请先配置")
             )
         yield event.plain_result("\n".join(lines))

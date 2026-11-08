@@ -1,6 +1,6 @@
 # astrbot_plugin_xxtsorryink
 
-> 入群门禁：**按申请理由自动审批** + **进群做题验证** + **管理员群管命令**
+> 入群门禁：**按申请理由自动审批**（含**学习通手机号校验**）+ **进群做题验证** + **管理员群管命令**
 
 AstrBot 插件，面向 `aiocqhttp`（OneBot v11，配合 SnowLuma / NapCat 等协议端）。
 只对配置里列出的群生效，其他群**完全不干预**。
@@ -47,6 +47,7 @@ AstrBot 插件，面向 `aiocqhttp`（OneBot v11，配合 SnowLuma / NapCat 等�
 | 自动剥离入群问题 | 群开了「入群问题」时，协议端给的 comment 形如 `问题：你好\n答案：1433223`，插件会自动抽出「答案：」后的内容再匹配，`exact` 依然可用 |
 | 黑名单优先 | 黑名单用户申请直接拒绝，不看理由 |
 | 未填理由策略 | 可配置「拒绝」或「放行」 |
+| 手机号校验 | `phone` 模式：理由里填学习通手机号，调用平台接口确认是平台用户才放行，见下文 |
 
 ### 2. 进群验证
 
@@ -116,7 +117,7 @@ git clone https://github.com/RoseKhlifa/astrbot_plugin_xxtsorryink.git
 # 重启 AstrBot 或热重载插件
 ```
 
-无第三方依赖，纯 AstrBot SDK。
+无第三方依赖，纯 AstrBot SDK（调用平台接口用标准库 `urllib`）。
 
 ### 前提条件
 
@@ -146,10 +147,43 @@ WebUI → 插件管理 → 入群门禁 → 配置。
 |---|---|---|---|
 | `group_id` | string | — | 目标群号 |
 | `allow_reasons` | text | — | 放行理由，**每行一条** |
-| `match_mode` | string | `exact` | `exact` 完全匹配 / `contains` 包含 |
+| `match_mode` | string | `exact` | `exact` 完全匹配 / `contains` 包含 / `phone` 手机号校验 |
 | `reject_reason` | string | 申请理由不正确… | 拒绝时回给申请人 |
 | `on_empty_reason` | string | `reject` | 未填理由时：拒绝 / 放行 |
 | `verify_new_member` | bool | `true` | 本群是否开启进群验证 |
+
+### 平台接口 `xxt`（手机号校验用）
+
+| 字段 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `api_base` | string | — | 平台地址，例如 `http://127.0.0.1:18768`（不要带 `/api`） |
+| `api_token` | string | — | 与平台 `.env` 里的 `XXT_BOT_TOKEN` 一致 |
+| `timeout_seconds` | float | `8` | 接口超时 |
+| `on_api_error` | string | `ignore` | 接口出错时：`ignore` 不处理留给人工 / `reject` 拒绝 / `approve` 放行 |
+
+### 手机号校验（`phone` 模式）
+
+用来只让平台的真实用户进官方群：
+
+1. 平台服务器的 `.env` 加一行 `XXT_BOT_TOKEN=<随机长字符串>`，重启平台。
+2. 插件配置 `xxt.api_base`、`xxt.api_token`，目标群的规则把 `match_mode` 设成 `phone`（`allow_reasons` 可留空）。
+3. QQ 群的入群问题设成「请填写你的学习通手机号」。
+
+插件从理由（优先「答案：」后的内容）里取出 11 位手机号，全角数字、空格、横线、`+86` 都能识别，然后调用 `POST /api/bot/member-check`：
+
+| 平台返回 | 结果 | 回给申请人 |
+|---|---|---|
+| `ok` | 放行，并把这个 QQ 绑定到该账号 | — |
+| 没取到手机号 | 拒绝（不调接口） | 请在申请理由里填写 11 位学习通手机号 |
+| `not_found` | 拒绝 | 这个手机号还没有在平台登录过，请先登录后再申请 |
+| `phone_taken` | 拒绝 | 这个手机号已经被另一个 QQ 用过了，如有疑问请联系管理员 |
+| `qq_bound` | 拒绝 | 这个 QQ 已经绑定了别的手机号，请填写之前用过的那个 |
+| 接口出错 / 超时 / 密钥不对 | 按 `on_api_error` | 默认不处理，申请留在群里等管理员 |
+
+- 一个账号只能放一个 QQ 进来，号码被转给别人也带不进第二个人。用户换 QQ 时，管理员用 `/解绑 <QQ或手机号>` 解除。
+- 平台只回答「是 / 否」，不会返回姓名、学校等资料。
+- 日志里的手机号一律打码成 `138****0001`。
+- `/joingate test <群号> <理由>` 在 phone 模式下只检查能否取到手机号，不调用接口，也不会绑定。
 
 ### 进群验证 `verify`
 
@@ -214,6 +248,7 @@ AstrBot/data/config/astrbot_plugin_xxtsorryink_config.json
 | `/禁言 <QQ> [时长]` | 默认 10 分钟 | `/禁言 123456 2h` |
 | `/解禁 <QQ>` | 解除禁言 | `/解禁 123456` |
 | `/踢 <QQ> [黑]` | 踢出；带 `黑` 同时拒绝再加群 | `/踢 123456 黑` |
+| `/解绑 <QQ或手机号>` | 解除手机号与 QQ 的绑定（用户换 QQ 时用），不需要群号 | `/解绑 123456` |
 
 **时长写法**：`600` / `600s` / `10m` / `2h` / `1d` / `30秒` / `永久`
 （自动裁剪到 QQ 上限 30 天）
@@ -303,6 +338,7 @@ event.message_str = message_str[len(wake_prefix):].strip()   # "/管理" → "�
 docker exec astrbot python3 /AstrBot/data/plugins/astrbot_plugin_xxtsorryink/tests/test_decision.py
 docker exec astrbot python3 /AstrBot/data/plugins/astrbot_plugin_xxtsorryink/tests/test_verify.py
 docker exec astrbot python3 /AstrBot/data/plugins/astrbot_plugin_xxtsorryink/tests/test_admin.py
+docker exec astrbot python3 /AstrBot/data/plugins/astrbot_plugin_xxtsorryink/tests/test_phone.py
 ```
 
 | 文件 | 覆盖 |
@@ -310,6 +346,7 @@ docker exec astrbot python3 /AstrBot/data/plugins/astrbot_plugin_xxtsorryink/tes
 | `test_decision.py` | 17 条理由匹配（问题包装、严格性、空理由、非目标群） |
 | `test_verify.py` | 失败计数、拉黑阈值、踢人参数、答案归一化、超时守卫 |
 | `test_admin.py` | 命令文本提取、管理员识别、时长解析、禁言/踢人参数、黑名单共用 |
+| `test_phone.py` | 手机号提取与打码、phone 模式判定、本地假接口的真实 HTTP 调用、接口出错策略、解绑 |
 
 全部输出 `ALL PASSED` 即通过。
 
@@ -360,13 +397,14 @@ docker logs -f astrbot 2>&1 | grep JoinGate
 
 ```
 astrbot_plugin_xxtsorryink/
-├── main.py              # 插件主体（审批 + 验证 + 管理员命令）
+├── main.py              # 插件主体（审批 + 手机号校验 + 验证 + 管理员命令）
 ├── metadata.yaml        # 插件元信息
 ├── _conf_schema.json    # WebUI 配置 schema
 ├── tests/
 │   ├── test_decision.py # 理由匹配
 │   ├── test_verify.py   # 验证流程
-│   └── test_admin.py    # 管理员命令
+│   ├── test_admin.py    # 管理员命令
+│   └── test_phone.py    # 手机号校验
 ├── CHANGELOG.md
 ├── LICENSE
 └── README.md

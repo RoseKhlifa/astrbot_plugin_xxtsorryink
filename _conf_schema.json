@@ -36,9 +36,10 @@
             "description": "匹配方式",
             "options": [
               "exact",
-              "contains"
+              "contains",
+              "phone"
             ],
-            "hint": "exact=完全一致（推荐，会自动剥离「答案：」前缀）；contains=包含关键词",
+            "hint": "exact=完全一致（推荐，会自动剥离「答案：」前缀）；contains=包含关键词；phone=理由填学习通手机号，调用平台接口确认（需先配置下方「平台接口」，放行理由可留空）",
             "default": "exact"
           },
           "reject_reason": {
@@ -65,6 +66,41 @@
       }
     },
     "default": []
+  },
+  "xxt": {
+    "type": "object",
+    "description": "平台接口（手机号校验）",
+    "hint": "分群规则选 phone 模式时使用",
+    "items": {
+      "api_base": {
+        "type": "string",
+        "description": "平台地址",
+        "hint": "例如 http://127.0.0.1:18768，末尾不要带 /api",
+        "default": ""
+      },
+      "api_token": {
+        "type": "string",
+        "description": "机器人密钥",
+        "hint": "与平台 .env 里的 XXT_BOT_TOKEN 一致",
+        "default": ""
+      },
+      "timeout_seconds": {
+        "type": "float",
+        "description": "接口超时（秒）",
+        "default": 8
+      },
+      "on_api_error": {
+        "type": "string",
+        "description": "接口出错时",
+        "options": [
+          "ignore",
+          "reject",
+          "approve"
+        ],
+        "hint": "ignore=不处理，留给管理员人工审批（推荐）；reject=拒绝并提示稍后再申请；approve=直接放行",
+        "default": "ignore"
+      }
+    }
   },
   "verify": {
     "type": "object",
