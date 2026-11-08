@@ -24,6 +24,10 @@ from astrbot.api.star import Context, Star
 
 LOG_PREFIX = "[JoinGate]"
 
+# Cloudflare 会按 UA 拦截裸 urllib（返回 403 error code: 1010），
+# 必须显式带一个正常的 User-Agent，否则所有审批都会退化成人工处理。
+_USER_AGENT = "AstrBot-XxtGate/2.0.1"
+
 PHONE_MISSING = "请在申请理由里填写 11 位学习通手机号"
 DEFAULT_WELCOME = "欢迎{surname}同学进群，感谢您的支持。"
 WELCOME_TTL = 86400  # 审批后一天内进群都能用上姓氏
@@ -138,6 +142,7 @@ class JoinGate(Star):
             headers={
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {api['api_token']}",
+                "User-Agent": _USER_AGENT,
             },
         )
         try:

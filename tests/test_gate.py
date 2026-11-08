@@ -53,7 +53,14 @@ class FakeAPI(BaseHTTPRequestHandler):
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-        FakeAPI.calls.append((self.path, self.headers.get("Authorization"), body))
+        FakeAPI.calls.append(
+            (
+                self.path,
+                self.headers.get("Authorization"),
+                self.headers.get("User-Agent"),
+                body,
+            )
+        )
         if FakeAPI.fail:
             self._reply(500, {"error": "boom"})
         elif self.headers.get("Authorization") != "Bearer secret":
@@ -117,7 +124,13 @@ async def main():
     # 判定
     ok, reason, surname, why = await g._decide("问题：手机号\n答案：13800000001")
     assert (ok, reason, surname) == (True, "", "张"), (ok, reason, surname)
-    assert FakeAPI.calls[-1] == ("/api/bot/member-check", "Bearer secret", {"phone": "13800000001"})
+    assert FakeAPI.calls[-1] == (
+        "/api/bot/member-check",
+        "Bearer secret",
+        mod._USER_AGENT,
+        {"phone": "13800000001"},
+    )
+    assert mod._USER_AGENT, "必须显式带 UA，否则 Cloudflare 会拦 urllib"
     assert "138****0001" in why and "13800000001" not in why
 
     ok, reason, _, _ = await g._decide("答案：13900000000")

@@ -3,6 +3,13 @@
 All notable changes to this plugin are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/).
 
+## [2.0.1] - 2026-11-09
+
+### Fixed
+- 接口请求未带 `User-Agent`，被 Cloudflare 以 `403 error code: 1010` 拦截，
+  导致所有审批都退化成「留给管理员人工处理」。现显式发送 `AstrBot-XxtGate/2.0.1`，
+  并在测试中断言该请求头存在。
+
 ## [2.0.0] - 2026-11-08
 
 ### Changed
