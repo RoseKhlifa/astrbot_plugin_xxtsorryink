@@ -1,0 +1,9 @@
+name: astrbot_plugin_xxtsorryink
+display_name: 入群门禁 · 理由审批 + 进群验证
+desc: 指定群的入群申请按「申请理由」自动放行/拒绝；新人进群后 @ 出算术题限时验证，答错踢出、累计失败自动拉黑；内置管理员群管命令（拉黑/禁言/踢人）。
+version: v1.1.0
+author: RoseKhlifa
+repo: https://github.com/RoseKhlifa/astrbot_plugin_xxtsorryink
+astrbot_version: ">=4.24.0"
+support_platforms:
+  - aiocqhttp
