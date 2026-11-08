@@ -1,145 +1,43 @@
 {
   "enabled": {
     "type": "bool",
-    "description": "入群申请总开关",
+    "description": "入群审批总开关",
     "hint": "关闭后不再自动审批任何入群申请",
     "default": true
   },
-  "admin_qq": {
+  "group_ids": {
     "type": "text",
-    "description": "管理员QQ（每行一个）",
-    "hint": "只有这些 QQ 能用 /拉黑 /禁言 /踢 等群管命令，群聊或私聊均可",
-    "default": "2221542777"
+    "description": "目标群号（每行一个）",
+    "hint": "只有这些群会被处理，其余群一律不动。入群问题请设成「请填写你的学习通手机号」",
+    "default": ""
   },
-  "rules": {
-    "type": "template_list",
-    "description": "分群规则",
-    "hint": "只有出现在这里的群才会被处理，其余群一律不动",
-    "templates": {
-      "rule": {
-        "name": "群规则",
-        "items": {
-          "group_id": {
-            "type": "string",
-            "description": "目标群号",
-            "hint": "QQ 群号，纯数字",
-            "default": ""
-          },
-          "allow_reasons": {
-            "type": "text",
-            "description": "放行理由（每行一条）",
-            "hint": "新成员填写的申请理由与其中任意一条匹配时放行，其余一律拒绝",
-            "default": ""
-          },
-          "match_mode": {
-            "type": "string",
-            "description": "匹配方式",
-            "options": [
-              "exact",
-              "contains",
-              "phone"
-            ],
-            "hint": "exact=完全一致（推荐，会自动剥离「答案：」前缀）；contains=包含关键词；phone=理由填学习通手机号，调用平台接口确认（需先配置下方「平台接口」，放行理由可留空）",
-            "default": "exact"
-          },
-          "reject_reason": {
-            "type": "string",
-            "description": "拒绝时返回的理由",
-            "default": "申请理由不正确，请按群公告填写"
-          },
-          "on_empty_reason": {
-            "type": "string",
-            "description": "未填写申请理由时",
-            "options": [
-              "reject",
-              "approve"
-            ],
-            "default": "reject"
-          },
-          "verify_new_member": {
-            "type": "bool",
-            "description": "本群开启进群验证（做题）",
-            "hint": "开启后新成员进群需在限时内答对算术题，否则踢出",
-            "default": true
-          }
-        }
-      }
-    },
-    "default": []
+  "api_base": {
+    "type": "string",
+    "description": "平台地址",
+    "hint": "例如 http://127.0.0.1:18768，末尾不要带 /api",
+    "default": ""
   },
-  "xxt": {
-    "type": "object",
-    "description": "平台接口（手机号校验）",
-    "hint": "分群规则选 phone 模式时使用",
-    "items": {
-      "api_base": {
-        "type": "string",
-        "description": "平台地址",
-        "hint": "例如 http://127.0.0.1:18768，末尾不要带 /api",
-        "default": ""
-      },
-      "api_token": {
-        "type": "string",
-        "description": "机器人密钥",
-        "hint": "与平台 .env 里的 XXT_BOT_TOKEN 一致",
-        "default": ""
-      },
-      "timeout_seconds": {
-        "type": "float",
-        "description": "接口超时（秒）",
-        "default": 8
-      },
-      "on_api_error": {
-        "type": "string",
-        "description": "接口出错时",
-        "options": [
-          "ignore",
-          "reject",
-          "approve"
-        ],
-        "hint": "ignore=不处理，留给管理员人工审批（推荐）；reject=拒绝并提示稍后再申请；approve=直接放行",
-        "default": "ignore"
-      }
-    }
+  "api_token": {
+    "type": "string",
+    "description": "机器人密钥",
+    "hint": "与平台 .env 里的 XXT_BOT_TOKEN 一致",
+    "default": ""
   },
-  "verify": {
-    "type": "object",
-    "description": "进群验证",
-    "items": {
-      "enabled": {
-        "type": "bool",
-        "description": "启用进群验证",
-        "default": true
-      },
-      "timeout_seconds": {
-        "type": "int",
-        "description": "答题限时（秒）",
-        "hint": "超时视为失败",
-        "default": 120
-      },
-      "operand_max": {
-        "type": "int",
-        "description": "算术题操作数上限",
-        "hint": "题目为 a + b，a、b 取值 1 ~ 该值",
-        "default": 20
-      },
-      "max_failures": {
-        "type": "int",
-        "description": "累计失败多少次拉黑",
-        "hint": "跨群累计；达上限后踢出并拒绝再次加群",
-        "default": 2
-      },
-      "blacklist_on_max": {
-        "type": "bool",
-        "description": "达上限时拉黑",
-        "hint": "拉黑 = 拒绝再次加群 + 本地黑名单（申请时直接拒绝）",
-        "default": true
-      },
-      "kick_on_wrong": {
-        "type": "bool",
-        "description": "答错/超时踢出群",
-        "default": true
-      }
-    }
+  "timeout_seconds": {
+    "type": "float",
+    "description": "接口超时（秒）",
+    "hint": "接口出错或超时时不处理，申请留给管理员人工审批",
+    "default": 8
+  },
+  "welcome_enabled": {
+    "type": "bool",
+    "description": "新人进群发欢迎消息",
+    "default": true
+  },
+  "welcome_template": {
+    "type": "string",
+    "description": "欢迎语",
+    "hint": "{surname} 会换成学习通姓名里的姓；不知道姓时换成「新」，即「欢迎新同学进群」",
+    "default": "欢迎{surname}同学进群，感谢您的支持。"
   }
 }

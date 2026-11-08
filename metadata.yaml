@@ -1,7 +1,7 @@
 name: astrbot_plugin_xxtsorryink
-display_name: 入群门禁 · 理由审批 + 进群验证
-desc: 指定群的入群申请按「申请理由」自动放行/拒绝，或校验学习通手机号是否为平台用户；新人进群后 @ 出算术题限时验证，答错踢出、累计失败自动拉黑；内置管理员群管命令（拉黑/禁言/踢人）。
-version: v1.2.0
+display_name: 入群门禁 · 学习通手机号审批 + 进群欢迎
+desc: 指定群的入群申请按学习通手机号自动审批：平台用户放行，否则拒绝并告知原因；新人进群后 @ 发欢迎语（按姓氏称呼）。
+version: v2.0.0
 author: RoseKhlifa
 repo: https://github.com/RoseKhlifa/astrbot_plugin_xxtsorryink
 astrbot_version: ">=4.24.0"
