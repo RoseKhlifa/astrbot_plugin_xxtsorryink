@@ -4,6 +4,9 @@
    在平台登录过就同意，否则拒绝并告诉申请人原因。接口出错时不处理，
    留给管理员人工审批。
 2. 新人进群：@ 对方发欢迎语，用平台给的姓氏称呼（欢迎张同学进群）。
+3. 群成员同步：定时（以及有人进群后）把目标群的成员 QQ 号报给平台，
+   平台据此判断「加入官方 QQ 群」任务是否完成。审批时也会把申请人的
+   QQ 号一起报上去，平台才知道这个 QQ 属于哪个账号。
 
 未配置的群完全不干预。
 """
@@ -26,7 +29,7 @@ LOG_PREFIX = "[JoinGate]"
 
 # Cloudflare 会按 UA 拦截裸 urllib（返回 403 error code: 1010），
 # 必须显式带一个正常的 User-Agent，否则所有审批都会退化成人工处理。
-_USER_AGENT = "AstrBot-XxtGate/2.0.1"
+_USER_AGENT = "AstrBot-XxtGate/2.1.0"
 
 PHONE_MISSING = "请在申请理由里填写 11 位学习通手机号"
 DEFAULT_WELCOME = "欢迎{surname}同学进群，感谢您的支持。"
@@ -108,6 +111,14 @@ class JoinGate(Star):
         self.cfg = config or {}
         # (群号, QQ) -> (姓氏, 审批时间)，进群时用来称呼
         self._surnames: dict[tuple[str, str], tuple[str, float]] = {}
+        self._sync_task: asyncio.Task | None = None
+
+    async def initialize(self) -> None:
+        self._ensure_sync_loop()
+
+    async def terminate(self) -> None:
+        if self._sync_task and not self._sync_task.done():
+            self._sync_task.cancel()
 
     # ------------------------------------------------------------------ 配置
     def _groups(self) -> set[str]:
@@ -124,20 +135,26 @@ class JoinGate(Star):
             "timeout": timeout,
         }
 
+    def _sync_minutes(self) -> int:
+        try:
+            return max(0, int(self.cfg.get("member_sync_minutes", 10)))
+        except (TypeError, ValueError):
+            return 10
+
     def _welcome_text(self, surname: str) -> str:
         template = str(self.cfg.get("welcome_template") or DEFAULT_WELCOME)
         # 不知道姓氏时：欢迎新同学进群
         return template.replace("{surname}", surname or "新")
 
     # ------------------------------------------------------------ 平台接口
-    def _member_check_sync(self, phone: str) -> dict[str, Any]:
+    def _post_sync(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
         """同步调用平台接口（放在线程里跑）。失败抛 RuntimeError。"""
         api = self._api_cfg()
         if not api["api_base"] or not api["api_token"]:
             raise RuntimeError("未配置平台地址或密钥")
         req = urllib.request.Request(
-            api["api_base"] + "/api/bot/member-check",
-            data=json.dumps({"phone": phone}).encode("utf-8"),
+            api["api_base"] + path,
+            data=json.dumps(body).encode("utf-8"),
             method="POST",
             headers={
                 "Content-Type": "application/json",
@@ -154,16 +171,20 @@ class JoinGate(Star):
         except (urllib.error.URLError, TimeoutError, ValueError) as exc:
             raise RuntimeError(str(exc)) from exc
 
-    async def _member_check(self, phone: str) -> dict[str, Any]:
-        return await asyncio.to_thread(self._member_check_sync, phone)
+    async def _member_check(self, phone: str, qq: str = "", group_id: str = "") -> dict[str, Any]:
+        # qq 让平台记住这个 QQ 属于哪个账号（「加入官方 QQ 群」任务要用）
+        body = {"phone": phone, "qq": qq, "group_id": group_id}
+        return await asyncio.to_thread(self._post_sync, "/api/bot/member-check", body)
 
-    async def _decide(self, comment: str) -> tuple[bool | None, str, str, str]:
+    async def _decide(
+        self, comment: str, user_id: str = "", group_id: str = ""
+    ) -> tuple[bool | None, str, str, str]:
         """返回 (放行? None=留给人工, 回给申请人的理由, 姓氏, 日志说明)。"""
         phone = _extract_phone(comment)
         if not phone:
             return False, PHONE_MISSING, "", "理由里没有手机号"
         try:
-            result = await self._member_check(phone)
+            result = await self._member_check(phone, user_id, group_id)
         except Exception as exc:  # noqa: BLE001
             return None, "", "", f"手机号 {_mask_phone(phone)} 校验接口出错：{exc} -> 留给管理员人工处理"
         if result.get("ok") is True:
@@ -182,6 +203,57 @@ class JoinGate(Star):
 
     def _bot_of(self, event: AstrMessageEvent) -> Any:
         return getattr(event, "bot", None) or self._find_bot()
+
+    # -------------------------------------------------------------- 群成员同步
+    def _ensure_sync_loop(self) -> None:
+        """启动定时同步（插件加载时；万一没启动，收到事件时补上）。"""
+        if self._sync_task and not self._sync_task.done():
+            return
+        try:
+            self._sync_task = asyncio.get_running_loop().create_task(self._sync_loop())
+        except RuntimeError:
+            self._sync_task = None  # 还没有事件循环，等下一个事件
+
+    async def _sync_loop(self) -> None:
+        await asyncio.sleep(15)  # 等协议端连上
+        while True:
+            minutes = self._sync_minutes()
+            if minutes > 0:
+                bot = self._find_bot()
+                if bot is not None:
+                    for gid in sorted(self._groups()):
+                        await self._sync_group(bot, gid)
+            await asyncio.sleep(max(minutes, 1) * 60)
+
+    async def _sync_group(self, bot: Any, group_id: str) -> bool:
+        """读群成员列表并报给平台。失败只记日志，下次再来。"""
+        try:
+            res = await bot.call_action("get_group_member_list", group_id=int(group_id))
+        except Exception as exc:  # noqa: BLE001
+            self.logger.warning(f"{LOG_PREFIX} 群 {group_id} 读取成员失败: {exc}")
+            return False
+        rows = res.get("data") if isinstance(res, dict) else res
+        members = sorted({str(_get(m, "user_id", "")) for m in rows or [] if _get(m, "user_id")})
+        if not members:
+            self.logger.warning(f"{LOG_PREFIX} 群 {group_id} 成员列表为空，跳过同步")
+            return False
+        try:
+            result = await asyncio.to_thread(
+                self._post_sync, "/api/bot/group-members", {"group_id": group_id, "members": members}
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.logger.warning(f"{LOG_PREFIX} 群 {group_id} 成员同步失败: {exc}")
+            return False
+        self.logger.info(
+            f"{LOG_PREFIX} 群 {group_id} 成员已同步：{len(members)} 人，"
+            f"其中 {result.get('linked_users', 0)} 人能对应到平台账号"
+        )
+        return True
+
+    async def _sync_soon(self, bot: Any, group_id: str, delay: float = 5.0) -> None:
+        """有人进群后稍等一下再同步，让他尽快能领取任务。"""
+        await asyncio.sleep(delay)
+        await self._sync_group(bot, group_id)
 
     # -------------------------------------------------------------- 入群申请
     @filter.event_message_type(filter.EventMessageType.ALL)
@@ -210,7 +282,8 @@ class JoinGate(Star):
             self.logger.error(f"{LOG_PREFIX} 找不到 OneBot 客户端，无法提交审批结果")
             return
 
-        approve, reason, surname, why = await self._decide(comment)
+        self._ensure_sync_loop()
+        approve, reason, surname, why = await self._decide(comment, user_id, group_id)
         if approve is None:
             self.logger.warning(f"{LOG_PREFIX} 群 {group_id} 用户 {user_id} {why}")
             return
@@ -248,9 +321,6 @@ class JoinGate(Star):
     # -------------------------------------------------------------- 入群欢迎
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_group_increase(self, event: AstrMessageEvent) -> None:
-        if not self.cfg.get("welcome_enabled", True):
-            return
-
         raw = getattr(event.message_obj, "raw_message", None)
         if _get(raw, "post_type") != "notice":
             return
@@ -266,6 +336,12 @@ class JoinGate(Star):
 
         bot = self._bot_of(event)
         if bot is None:
+            return
+
+        self._ensure_sync_loop()
+        if self._sync_minutes() > 0:
+            self._pending_sync = asyncio.create_task(self._sync_soon(bot, group_id))
+        if not self.cfg.get("welcome_enabled", True):
             return
 
         surname, at = self._surnames.pop((group_id, user_id), ("", 0.0))

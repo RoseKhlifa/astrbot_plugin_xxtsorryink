@@ -65,6 +65,8 @@ class FakeAPI(BaseHTTPRequestHandler):
             self._reply(500, {"error": "boom"})
         elif self.headers.get("Authorization") != "Bearer secret":
             self._reply(401, {"error": "unauthorized"})
+        elif self.path == "/api/bot/group-members":
+            self._reply(200, {"ok": True, "members": len(body["members"]), "linked_users": 1})
         elif body["phone"] == "13800000001":
             self._reply(200, {"ok": True, "code": "ok", "surname": "张"})
         elif body["phone"] == "13800000002":
@@ -113,6 +115,7 @@ def make_gate(token="secret", api_base=base, **extra):
     g = JoinGate.__new__(JoinGate)
     g.cfg = {"enabled": True, "group_ids": "1", "api_base": api_base + "/", "api_token": token, **extra}
     g._surnames = {}
+    g._sync_task = None
     g.logs = []
     g.logger = type("L", (), {k: (lambda s, m: g.logs.append(m)) for k in ("info", "error", "warning")})()
     return g
@@ -128,7 +131,7 @@ async def main():
         "/api/bot/member-check",
         "Bearer secret",
         mod._USER_AGENT,
-        {"phone": "13800000001"},
+        {"phone": "13800000001", "qq": "", "group_id": ""},
     )
     assert mod._USER_AGENT, "必须显式带 UA，否则 Cloudflare 会拦 urllib"
     assert "138****0001" in why and "13800000001" not in why
@@ -209,6 +212,41 @@ async def main():
     ev = joined(10001)
     await g3.on_group_increase(ev)
     assert not ev.bot.calls
+
+    # 审批时把申请人的 QQ 和群号一起报给平台（任务要用）
+    ev = request(20001, "答案：13800000001")
+    await g.on_group_request(ev)
+    assert FakeAPI.calls[-1][3] == {"phone": "13800000001", "qq": "20001", "group_id": "1"}, FakeAPI.calls[-1]
+
+    # 群成员同步：列表或 {data: 列表} 都认，去重排序；空列表不上报
+    class MemberBot:
+        def __init__(self, rows):
+            self.rows = rows
+
+        async def call_action(self, action, **kw):
+            assert action == "get_group_member_list" and kw == {"group_id": 1}
+            return self.rows
+
+    n = len(FakeAPI.calls)
+    assert await g._sync_group(MemberBot([{"user_id": 30002}, {"user_id": 30001}, {"user_id": 30002}]), "1") is True
+    assert FakeAPI.calls[-1][0] == "/api/bot/group-members"
+    assert FakeAPI.calls[-1][3] == {"group_id": "1", "members": ["30001", "30002"]}
+    assert await g._sync_group(MemberBot({"data": [{"user_id": 30003}]}), "1") is True
+    assert FakeAPI.calls[-1][3]["members"] == ["30003"]
+    n = len(FakeAPI.calls)
+    assert await g._sync_group(MemberBot([]), "1") is False
+    assert len(FakeAPI.calls) == n, "空列表不能上报，否则平台会以为所有人都退群了"
+
+    class BrokenBot:
+        async def call_action(self, action, **kw):
+            raise RuntimeError("timeout")
+
+    assert await g._sync_group(BrokenBot(), "1") is False
+    FakeAPI.fail = True
+    assert await g._sync_group(MemberBot([{"user_id": 30001}]), "1") is False, "平台出错只记日志"
+    FakeAPI.fail = False
+    assert make_gate(member_sync_minutes=0)._sync_minutes() == 0
+    assert make_gate()._sync_minutes() == 10
 
     print("ALL PASSED")
 

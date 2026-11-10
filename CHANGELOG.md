@@ -3,6 +3,15 @@
 All notable changes to this plugin are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/).
 
+## [2.1.0] - 2026-11-10
+
+### Added
+- 群成员同步：每 `member_sync_minutes`（默认 10）分钟把目标群的成员 QQ 号报给平台 `POST /api/bot/group-members`；有人进群后 5 秒再同步一次。平台据此判断「加入官方 QQ 群」任务。
+- 入群审批调用 `member-check` 时带上申请人的 `qq` 和 `group_id`，平台据此知道这个 QQ 属于哪个账号。
+
+### Notes
+- 读取失败或成员列表为空时不上报，避免平台以为所有人都退群了。
+
 ## [2.0.1] - 2026-11-09
 
 ### Fixed

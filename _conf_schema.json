@@ -29,6 +29,12 @@
     "hint": "接口出错或超时时不处理，申请留给管理员人工审批",
     "default": 8
   },
+  "member_sync_minutes": {
+    "type": "int",
+    "description": "群成员同步间隔（分钟）",
+    "hint": "定时把目标群的成员 QQ 号报给平台，用来判断「加入官方 QQ 群」任务；有人进群后也会立即同步一次。0 = 不同步",
+    "default": 10
+  },
   "welcome_enabled": {
     "type": "bool",
     "description": "新人进群发欢迎消息",
