@@ -33,6 +33,7 @@ _USER_AGENT = "AstrBot-XxtGate/2.1.0"
 
 PHONE_MISSING = "请在申请理由里填写 11 位学习通手机号"
 DEFAULT_WELCOME = "欢迎{surname}同学进群，感谢您的支持。"
+_CIALLO_REPLY = "Ciallo～(∠・ω< )⌒★"
 WELCOME_TTL = 86400  # 审批后一天内进群都能用上姓氏
 
 # 协议端会把「入群问题 + 答案」整体塞进 comment，形如：
@@ -101,6 +102,43 @@ def _parse_groups(value: Any) -> set[str]:
     else:
         items = re.split(r"[\s,，]+", str(value or ""))
     return {x.strip() for x in items if x.strip().isdigit()}
+
+
+def _command_body(event: AstrMessageEvent) -> str | None:
+    """提取「/命令」后面的大文。
+
+    AstrBot 的唤醒阶段会把 wake_prefix（默认 "/"）从 event.message_str
+    里删掉，所以不能只看 message_str，必须回看原始消息才能判断是否带斜杠。
+    """
+    raw = getattr(event.message_obj, "raw_message", None)
+    candidates: list[str] = []
+
+    raw_text = _get(raw, "raw_message")
+    if isinstance(raw_text, str) and raw_text:
+        candidates.append(raw_text)
+
+    msg = _get(raw, "message")
+    if isinstance(msg, str):
+        candidates.append(msg)
+    elif isinstance(msg, list):
+        parts = []
+        for seg in msg:
+            if isinstance(seg, dict) and seg.get("type") == "text":
+                data = seg.get("data") or {}
+                parts.append(str(data.get("text") or ""))
+        if parts:
+            candidates.append("".join(parts))
+
+    if getattr(event, "message_str", None):
+        candidates.append(event.message_str)
+
+    for cand in candidates:
+        c = cand.strip()
+        # 去掉 @ 之类的 CQ 码前缀，例如 "[CQ:at,qq=123] /ciallo"
+        c = re.sub(r"^(?:\[CQ:[^\]]+\])+", "", c).strip()
+        if c.startswith(("/", "／")):
+            return c[1:].strip()
+    return None
 
 
 class JoinGate(Star):
@@ -203,6 +241,33 @@ class JoinGate(Star):
 
     def _bot_of(self, event: AstrMessageEvent) -> Any:
         return getattr(event, "bot", None) or self._find_bot()
+
+    # -------------------------------------------------------------- 存活检查
+    @filter.event_message_type(filter.EventMessageType.ALL)
+    async def on_ciallo(self, event: AstrMessageEvent) -> None:
+        """发 /ciallo（大小写均可）时回一句，用来确认机器人还活着。"""
+        if not self.cfg.get("ping_enabled", True):
+            return
+
+        body = _command_body(event)
+        if not body:
+            return
+        if body.split()[0].lower() != "ciallo":
+            return
+
+        # 只在目标群和私聊里响应，避免在无关群里刷屏
+        group_id = str(event.get_group_id() or "")
+        if group_id and group_id not in self._groups():
+            return
+
+        reply = str(self.cfg.get("ping_reply") or _CIALLO_REPLY)
+        sender = event.get_sender_id()
+        self.logger.info(
+            f"{LOG_PREFIX} 存活检查 ciallo from {sender} "
+            f"({'私聊' if not group_id else '群 ' + group_id})"
+        )
+        yield event.plain_result(reply)
+        event.stop_event()
 
     # -------------------------------------------------------------- 群成员同步
     def _ensure_sync_loop(self) -> None:

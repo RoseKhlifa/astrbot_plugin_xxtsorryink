@@ -39,11 +39,21 @@
     "type": "bool",
     "description": "新人进群发欢迎消息",
     "default": true
-  },
-  "welcome_template": {
+  },  "welcome_template": {
     "type": "string",
     "description": "欢迎语",
     "hint": "{surname} 会换成学习通姓名里的姓；不知道姓时换成「新」，即「欢迎新同学进群」",
     "default": "欢迎{surname}同学进群，感谢您的支持。"
+  },
+  "ping_enabled": {
+    "type": "bool",
+    "description": "启用 /ciallo 存活检查",
+    "hint": "在目标群或私聊发 /ciallo（大小写均可），机器人回一句确认还活着",
+    "default": true
+  },
+  "ping_reply": {
+    "type": "string",
+    "description": "/ciallo 的回复内容",
+    "default": "Ciallo～(∠・ω< )⌒★"
   }
 }

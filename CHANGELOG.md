@@ -3,6 +3,12 @@
 All notable changes to this plugin are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/).
 
+## [2.2.0] - 2026-11-10
+
+### Added
+- `/ciallo` 存活检查命令（大小写均可，`/Ciallo` `/CIALLO` 都行），
+  默认回复 `Ciallo～(∠・ω< )⌒★`；仅在目标群与私聊响应，可配置开关与文案
+
 ## [2.1.0] - 2026-11-10
 
 ### Added
