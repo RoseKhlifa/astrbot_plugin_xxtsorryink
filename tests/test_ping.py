@@ -1,4 +1,4 @@
-"""自测：/ciallo 存活检查（命令提取 + 作用域 + 大小写 + 自定义回复）。"""
+"""自测：/ciallo 与裸 ciallo 存活检查。"""
 import asyncio
 import importlib.util
 import sys
@@ -12,6 +12,8 @@ SPEC.loader.exec_module(mod)
 
 JoinGate = mod.JoinGate
 _body = mod._command_body
+_plain = mod._plain_text
+_is = mod._is_ciallo
 CIALLO = mod._CIALLO_REPLY
 
 assert CIALLO == "Ciallo～(∠・ω< )⌒★", CIALLO
@@ -77,56 +79,65 @@ async def run(g, ev):
 
 
 async def main():
-    # ---- 命令文本提取（唤醒阶段会删掉开头的 /）----
+    # ---- 文本提取 ----
     assert _body(Ev({"raw_message": "/ciallo"}, message_str="ciallo")) == "ciallo"
-    assert _body(Ev({"raw_message": "/Ciallo"}, message_str="Ciallo")) == "Ciallo"
+    assert _body(Ev({"raw_message": "ciallo"}, message_str="ciallo")) is None
+    assert _plain(Ev({"raw_message": "ciallo"}, message_str="ciallo")) == "ciallo"
+    assert _body(Ev({"raw_message": "[CQ:at,qq=1] ciallo"}, message_str="ciallo")) is None
+    assert _plain(Ev({"raw_message": "[CQ:at,qq=1] ciallo"}, message_str="ciallo")) == "ciallo"
     assert _body(Ev({"raw_message": "／CIALLO"}, message_str="CIALLO")) == "CIALLO"
-    assert _body(Ev({"raw_message": "[CQ:at,qq=1] /ciallo"}, message_str="ciallo")) == "ciallo"
-    assert _body(Ev({"message": [{"type": "text", "data": {"text": "/ciallo"}}]},
-                    message_str="ciallo")) == "ciallo"
-    assert _body(Ev({"raw_message": "ciallo"}, message_str="ciallo")) is None, "无斜杠不算命令"
-    print("OK  命令文本提取（前缀剥离 / 全角 / CQ 前缀 / array / 无斜杠不触发）")
+    print("OK  文本提取（斜杠 / 裸文本 / 全角 / CQ 前缀）")
+
+    # ---- 裸命令判定 ----
+    assert _is("ciallo", whole=True) is True
+    assert _is("Ciallo", whole=True) is True
+    assert _is("  CIALLO  ", whole=True) is True
+    assert _is("ciallo！", whole=True) is True
+    assert _is("ciallo~", whole=True) is True
+    assert _is("ciallo 是什么意思", whole=True) is False
+    assert _is("cialloooo", whole=True) is False
+    assert _is("hi ciallo", whole=True) is False
+    print("OK  裸命令严格判定（标点可容忍，长句不误触）")
+
+    # ---- 斜杠命令允许带参数 ----
+    assert _is("ciallo 你好", whole=False) is True
+    assert _is("Ciallo!", whole=False) is True
+    assert _is("other", whole=False) is False
+    print("OK  斜杠命令取首词")
 
     g = make_gate()
 
-    # ---- 正常响应 ----
-    for raw in ("/ciallo", "/Ciallo", "/CIALLO", "/CiAlLo"):
-        ev = Ev({"raw_message": raw}, message_str=raw[1:])
+    # ---- 群里裸发 / 带斜杠都响应 ----
+    for text in ("ciallo", "Ciallo", "CIALLO", "ciallo！", "/ciallo", "/Ciallo"):
+        ev = Ev({"raw_message": text}, message_str=text.lstrip("/"))
         out = await run(g, ev)
-        assert len(out) == 1 and out[0].text == CIALLO, (raw, out)
-        assert ev.stopped, "必须 stop_event，避免继续交给 LLM"
-    print("OK  大小写不敏感，回复内容精确匹配，且 stop_event")
+        assert len(out) == 1 and out[0].text == CIALLO, (text, out)
+        assert ev.stopped
+    print("OK  群里裸发与 /ciallo 都响应，且 stop_event")
 
-    # ---- 私聊也响应 ----
-    ev = Ev({"raw_message": "/ciallo"}, message_str="ciallo", group=None)
-    out = await run(g, ev)
-    assert len(out) == 1, "私聊应响应"
-    print("OK  私聊响应")
+    # ---- 误触保护 ----
+    for text in ("ciallo 是什么意思", "ciallooo", "今天 ciallo 了吗", "/help"):
+        ev = Ev({"raw_message": text}, message_str=text.lstrip("/"))
+        assert not await run(g, ev), text
+    print("OK  长句/其他命令不误触")
 
-    # ---- 非目标群不响应 ----
-    ev = Ev({"raw_message": "/ciallo"}, message_str="ciallo", group="999999")
-    out = await run(g, ev)
-    assert not out and not ev.stopped, "非目标群不应响应"
-    print("OK  非目标群不响应")
+    # ---- 私聊 ----
+    for text in ("ciallo", "/ciallo"):
+        ev = Ev({"raw_message": text}, message_str=text.lstrip("/"), group=None)
+        out = await run(g, ev)
+        assert len(out) == 1, text
+    print("OK  私聊裸发与 /ciallo 都响应")
 
-    # ---- 其他命令不响应 ----
-    ev = Ev({"raw_message": "/help"}, message_str="help")
+    # ---- 非目标群 / 开关 / 自定义回复 ----
+    ev = Ev({"raw_message": "ciallo"}, message_str="ciallo", group="999999")
     assert not await run(g, ev)
-    print("OK  其他命令不响应")
-
-    # ---- 关闭开关 ----
-    ev = Ev({"raw_message": "/ciallo"}, message_str="ciallo")
+    ev = Ev({"raw_message": "ciallo"}, message_str="ciallo")
     assert not await run(make_gate(ping_enabled=False), ev)
-    print("OK  ping_enabled=false 时不响应")
-
-    # ---- 自定义回复 ----
-    ev = Ev({"raw_message": "/ciallo"}, message_str="ciallo")
-    out = await run(make_gate(ping_reply="pong"), ev)
+    out = await run(make_gate(ping_reply="pong"), Ev({"raw_message": "ciallo"}, message_str="ciallo"))
     assert out[0].text == "pong"
-    print("OK  自定义 ping_reply")
+    print("OK  非目标群不响应 / 开关 / 自定义回复")
 
-    # ---- 日志留痕（便于确认存活）----
-    assert any("存活检查" in m for m in g._logs), g._logs
+    assert any("存活检查" in m for m in g._logs)
     print("OK  日志留痕")
 
     print("\nALL PASSED")

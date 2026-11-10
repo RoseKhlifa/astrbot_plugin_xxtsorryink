@@ -104,22 +104,22 @@ def _parse_groups(value: Any) -> set[str]:
     return {x.strip() for x in items if x.strip().isdigit()}
 
 
-def _command_body(event: AstrMessageEvent) -> str | None:
-    """提取「/命令」后面的大文。
+def _text_candidates(event: AstrMessageEvent) -> list[str]:
+    """取出事件的候选文本（已去掉 CQ 码前缀）。
 
     AstrBot 的唤醒阶段会把 wake_prefix（默认 "/"）从 event.message_str
-    里删掉，所以不能只看 message_str，必须回看原始消息才能判断是否带斜杠。
+    里删掉，所以不能只看 message_str，必须回看原始消息。
     """
     raw = getattr(event.message_obj, "raw_message", None)
-    candidates: list[str] = []
+    raw_texts: list[str] = []
 
     raw_text = _get(raw, "raw_message")
     if isinstance(raw_text, str) and raw_text:
-        candidates.append(raw_text)
+        raw_texts.append(raw_text)
 
     msg = _get(raw, "message")
     if isinstance(msg, str):
-        candidates.append(msg)
+        raw_texts.append(msg)
     elif isinstance(msg, list):
         parts = []
         for seg in msg:
@@ -127,18 +127,49 @@ def _command_body(event: AstrMessageEvent) -> str | None:
                 data = seg.get("data") or {}
                 parts.append(str(data.get("text") or ""))
         if parts:
-            candidates.append("".join(parts))
+            raw_texts.append("".join(parts))
 
     if getattr(event, "message_str", None):
-        candidates.append(event.message_str)
+        raw_texts.append(event.message_str)
 
-    for cand in candidates:
+    out: list[str] = []
+    for cand in raw_texts:
         c = cand.strip()
         # 去掉 @ 之类的 CQ 码前缀，例如 "[CQ:at,qq=123] /ciallo"
         c = re.sub(r"^(?:\[CQ:[^\]]+\])+", "", c).strip()
-        if c.startswith(("/", "／")):
-            return c[1:].strip()
+        if c:
+            out.append(c)
+    return out
+
+
+def _command_body(event: AstrMessageEvent) -> str | None:
+    """提取「/命令」后面的内容；没有斜杠则返回 None。"""
+    for cand in _text_candidates(event):
+        if cand.startswith(("/", "／")):
+            return cand[1:].strip()
     return None
+
+
+def _plain_text(event: AstrMessageEvent) -> str:
+    """不带斜杠时的原文（用于裸命令）。"""
+    cands = _text_candidates(event)
+    return cands[0] if cands else ""
+
+
+def _is_ciallo(text: str, *, whole: bool) -> bool:
+    """判断是不是 ciallo。
+
+    whole=True  ：整句必须就是 ciallo（允许尾巴的标点），避免
+                   "ciallo 是什么意思" 这种句子被当成命令；
+    whole=False ：只取第一个词（用于明确的 /ciallo 形式，允许带参数）。
+    """
+    t = (text or "").strip()
+    if not t:
+        return False
+    if whole:
+        return t.strip("!！。.,，~～・ 　").lower() == "ciallo"
+    token = t.split()[0] if t.split() else ""
+    return token.strip("!！。.,，~～・").lower() == "ciallo"
 
 
 class JoinGate(Star):
@@ -245,14 +276,16 @@ class JoinGate(Star):
     # -------------------------------------------------------------- 存活检查
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_ciallo(self, event: AstrMessageEvent) -> None:
-        """发 /ciallo（大小写均可）时回一句，用来确认机器人还活着。"""
+        """发 /ciallo 或直接发 ciallo 时回一句，用来确认机器人还活着。"""
         if not self.cfg.get("ping_enabled", True):
             return
 
         body = _command_body(event)
-        if not body:
-            return
-        if body.split()[0].lower() != "ciallo":
+        if body is not None:
+            matched = _is_ciallo(body, whole=False)
+        else:
+            matched = _is_ciallo(_plain_text(event), whole=True)
+        if not matched:
             return
 
         # 只在目标群和私聊里响应，避免在无关群里刷屏

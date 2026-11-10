@@ -3,6 +3,13 @@
 All notable changes to this plugin are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/).
 
+## [2.3.0] - 2026-11-10
+
+### Changed
+- `/ciallo` 现在也支持**不带斜杠**直接发 `ciallo`（大小写均可，容忍尾部标点）
+- 裸命令采用整句严格匹配，`ciallo 是什么意思` / `ciallooo` 不会误触；
+  `/ciallo 任意参数` 仍按首词处理
+
 ## [2.2.0] - 2026-11-10
 
 ### Added

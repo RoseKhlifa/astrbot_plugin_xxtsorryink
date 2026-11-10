@@ -1,7 +1,7 @@
 name: astrbot_plugin_xxtsorryink
 display_name: 入群门禁 · 学习通手机号审批 + 进群欢迎
 desc: 指定群的入群申请按学习通手机号自动审批：平台用户放行，否则拒绝并告知原因；新人进群后 @ 发欢迎语（按姓氏称呼）；定时把群成员同步给平台，用于「加入官方 QQ 群」任务；支持 /ciallo 存活检查。
-version: v2.2.0
+version: v2.3.0
 author: RoseKhlifa
 repo: https://github.com/RoseKhlifa/astrbot_plugin_xxtsorryink
 astrbot_version: ">=4.24.0"
